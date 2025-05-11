@@ -42,7 +42,116 @@ pd.set_option('display.max_columns', None)
 N_LCF = 10000  # Pivot point in LCF
 NG = 4000000  # Maximum number of cycles
 
-# %%
+# set analyzer to "pylife" or "hybrid"
+analyzer = "pylife"
+
+# %% analyze_fatigue_pylife
+
+def analyze_fatigue_pylife(file_path):
+    """
+    Analyze a single fatigue test file using pylife MaxLikeInf method
+    
+    Parameters:
+    file_path : str, path to Excel file containing test data and reference results
+    
+    Returns:
+    dict with calculated and reference results
+    """
+    try:
+        print("\n=== Starting Analysis ===")
+        print(f"Processing file: {file_path}")
+        
+        # Read test data
+        df_test = pd.read_excel(file_path, sheet_name='Data')
+        print("\nInput Data:")
+        print(f"Columns found: {df_test.columns.tolist()}")
+        
+        # Rename 'loads' to 'load' if necessary
+        if 'loads' in df_test.columns:
+            df_test = df_test.rename(columns={'loads': 'load'})
+            
+        # Read reference values    
+        df_ref = pd.read_excel(file_path, sheet_name='Jurojin_results', header=None)
+        
+        # Extract reference values
+        ref_values = {}
+        for idx, row in df_ref.iterrows():
+            param_name = row[0]
+            param_value = row[1]
+            if isinstance(param_value, str) and ',' in param_value:
+                param_value = float(param_value.replace(',', '.'))
+            ref_values[param_name] = param_value
+            
+        print("\nReference values:")
+        for key, value in ref_values.items():
+            print(f"{key}: {value}")
+        
+        # Prepare data and run analysis
+        print("\nPreparing data for analysis...")
+        df_prepared = df_test[['load', 'cycles', 'censor']]
+        results = analyze_with_maxlikeinf(df_prepared, NG, ref_values)
+        
+        return results
+        
+    except Exception as e:
+        print(f"\nError processing {file_path}:")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        traceback.print_exc()
+        return None
+
+def analyze_with_maxlikeinf(df, NG, ref_values):
+    """
+    Analyze using only MaxLikeInf method
+    """
+    print("\n=== MaxLikeInf Analysis ===")
+    
+    # Prepare data for pylife
+    print("Determining fractures...")
+    df = woehler.determine_fractures(df, NG)
+    fatigue_data = df.fatigue_data
+    
+    print("\nRunning MaxLikeInf analysis...")
+    result = woehler.MaxLikeInf(fatigue_data).analyze()
+    
+    # Calculate parameters
+    calc_k = round(result.k_1, 2)
+    calc_ND = int(round(result.ND, 0))
+    calc_Pu50 = int(round(result.SD, 0))
+    calc_slog = round(np.log10(result.TS)/2.5361, 3)
+    
+    print("\nCalculated parameters:")
+    print(f"k: {calc_k}")
+    print(f"ND: {calc_ND}")
+    print(f"Pü50: {calc_Pu50}")
+    print(f"slog: {calc_slog}")
+    
+    # Calculate differences
+    results = {
+        'calc_k': calc_k,
+        'calc_ND': calc_ND,
+        'calc_Pu50': calc_Pu50,
+        'calc_slog': calc_slog,
+        'ref_k': ref_values['k'],
+        'ref_ND': int(ref_values['ND']),
+        'ref_Pu50': ref_values['Pü50'],
+        'ref_slog': ref_values['slog'],
+        'diff_k_pct': (calc_k - ref_values['k'])/ref_values['k'] * 100,
+        'diff_ND_pct': (calc_ND - ref_values['ND'])/ref_values['ND'] * 100,
+        'diff_Pu50_pct': (calc_Pu50 - ref_values['Pü50'])/ref_values['Pü50'] * 100,
+        'diff_slog_pct': (calc_slog - ref_values['slog'])/ref_values['slog'] * 100
+    }
+    
+    print("\nPercentage differences from reference:")
+    print(f"k: {results['diff_k_pct']:.2f}%")
+    print(f"ND: {results['diff_ND_pct']:.2f}%")
+    print(f"Pü50: {results['diff_Pu50_pct']:.2f}%")
+    print(f"slog: {results['diff_slog_pct']:.2f}%")
+    
+    return results
+
+
+# %% hybrid maxlike class definition
 class HybridMaxLikeInf(woehler.MaxLikeInf):
     def __init__(self, fatigue_data, file_path=None):
         super().__init__(fatigue_data)
@@ -262,8 +371,8 @@ class HybridMaxLikeInf(woehler.MaxLikeInf):
         
         return wc
 
-# %%
-def analyze_fatigue_file(file_path):
+# %% analyze_fatigue_hybrid
+def analyze_fatigue_hybrid(file_path):
     """
     Analyze a single fatigue test file using hybrid MaxLikeInf method
     """
@@ -392,7 +501,10 @@ print(f"Number of survivors: {len(df[df['censor'] == 0])}")
 print("\nFirst few rows of data:")
 print(df.head())
 
-results = analyze_fatigue_file(file_path)
+if analyzer == "pylife":
+    results = analyze_fatigue_pylife(file_path)
+elif analyzer == "hybrid":
+    results = analyze_fatigue_hybrid(file_path)
 
 # %%
 def batch_analyze_files(folder_path, output_filename=None):
@@ -418,8 +530,12 @@ def batch_analyze_files(folder_path, output_filename=None):
                 file_path = os.path.join(folder_path, filename)
                 print(f"\nProcessing file {processed_files + 1}: {filename}")
                 
-                # Step 4: Use our new analyze_fatigue_file function
-                results = analyze_fatigue_file(file_path)
+                # Step 4: Use either analyze_fatigue_pylife or analyze_fatigue_file function
+                
+                if analyzer == "pylife":
+                    results = analyze_fatigue_pylife(file_path)
+                elif analyzer == "hybrid":
+                    results = analyze_fatigue_hybrid(file_path)
                 
                 # Step 5: Add filename to results dictionary for reference
                 if results is not None:
@@ -524,4 +640,7 @@ print(f"Number of survivors: {len(df[df['censor'] == 0])}")
 print("\nFirst few rows of data:")
 print(df.head())
 
-results = analyze_fatigue_file(file_path)h@
+if analyzer == "pylife":
+    results = analyze_fatigue_pylife(file_path)
+elif analyzer == "hybrid":
+    results = analyze_fatigue_hybrid(file_path)
