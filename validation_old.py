@@ -1,9 +1,5 @@
 # %% [markdown]
-# # Wöhler analysis of fatigue data
-# 
-# using pylife
-# 
-# ... and reliability?
+# Wöhler analysis of fatigue data using pylife
 
 # %% [markdown]
 # **Import Statements:**
@@ -24,11 +20,8 @@ from plotly.subplots import make_subplots
 from scipy.stats import norm, linregress
 import pylife.materialdata.woehler as woehler
 from pylife.materiallaws import WoehlerCurve
-
 from scipy import optimize
-
 import matplotlib.pyplot as plt
-
 from scipy import stats
 from datetime import datetime
 
