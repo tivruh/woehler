@@ -17,14 +17,21 @@ from scipy.stats import norm, linregress
 import pylife.materialdata.woehler as woehler
 from pylife.materiallaws import WoehlerCurve
 from pylife.materialdata.woehler.likelihood import Likelihood
+from woehler_utils import *
+
 from scipy import optimize
 from scipy import stats
 from datetime import datetime
 
 
 # %% Constants, display options
+# Sheet containing data must be named 'Data'
+
+file_path = "All Data/4PB_7.xlsx"
+
 N_LCF = 10000  # Pivot point in LCF
 NG = 5000000   # Maximum number of cycles
+
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
@@ -68,16 +75,91 @@ def analyze_fatigue_file(file_path):
         print(f"Error message: {str(e)}")
         traceback.print_exc()
         return None, None
+
+
+# %% Prepare data for analysis
+
+df_test, ref_values = analyze_fatigue_file(file_path)
+df_prepared = df_test[['load', 'cycles', 'censor']]
+df_prepared = woehler.determine_fractures(df_prepared, NG)
+fatigue_data = df_prepared.fatigue_data
+
+
+# %% CONTROL: Run normal MaxLikeInf analysis BEFORE running further blocks
+analyzer = woehler.MaxLikeInf(fatigue_data)
+result = analyzer.analyze()
+print(f"Pylife results out of the box:")
+print(f"SD: {result.SD}")
+print(f"TS: {result.TS}")
+print(f"ND: {result.ND}")
+print(f"k_1: {result.k_1}")
+
+
+# %% Track optimization progress with MaxLikeInf
+
+# Create list to store optimization steps
+optimization_steps = []
+
+# Create likelihood object
+lh = Likelihood(fatigue_data)
+
+# Run Nelder-Mead first
+nm_results = run_optimization_with_tracking(lh, [fatigue_data.fatigue_limit, 1.2], method='nelder-mead')
+
+# Try L-BFGS-B if needed
+if not nm_results['success'] or not nm_results['reasonable_values']:
+    print("\nNelder-Mead failed or produced unreasonable values. Trying L-BFGS-B...")
+    bounds = [(fatigue_data.load.min() * 0.5, fatigue_data.load.max() * 2.0), (1.0, 10.0)]
     
+    lbfgs_results = run_optimization_with_tracking(
+        lh, 
+        [fatigue_data.fatigue_limit, 1.2], 
+        method='l-bfgs-b',
+        bounds=bounds
+    )
+    
+    # Compare results
+    print("\nComparison of methods:")
+    print(f"Nelder-Mead: SD={nm_results['SD']:.2f}, TS={nm_results['TS']:.2f}, Success={nm_results['success']}")
+    print(f"L-BFGS-B: SD={lbfgs_results['SD']:.2f}, TS={lbfgs_results['TS']:.2f}, Success={lbfgs_results['success']}")
+
 
 # %% [markdown] about fmin() output 
 # ## SciPy fmin optimization output
 # 
 # PyLife's Woehler module uses SciPy's `optimize.fmin()` function (Nelder-Mead algorithm) in MaxLikeInf to determine SD (endurance limit) and TS (scatter).
 # 
-# ![Scipy fmin output](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.fmin.html)
+# [Scipy fmin output](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.fmin.html)
 #
-# !TODO: add codeblock for fmin usage in MaxLikeInf
+# ### PyLife's original MaxLikeInf implementation (__max_likelihood_inf_limit method)
+# ```python
+# SD_start = self._fd.fatigue_limit
+# TS_start = 1.2
+
+# var_opt = optimize.fmin(
+#     lambda p: -self._lh.likelihood_infinite(p[0], p[1]),
+#     [SD_start, TS_start], 
+#     disp=False,  # Note: PyLife suppresses output
+#     full_output=True
+# )
+# extracts values withoutchecking warnflags
+# SD_50 = var_opt[0][0]
+# TS = var_opt[0][1]
+#
+# return SD_50, TS
+# 
+# # likelihood_infinite(self, SD, TS): 
+# Calculates likelihood for points in the infinite zone (horizontal part of curve)
+# 
+# infinite_zone = self._fd.infinite_zone
+# std_log = scattering_range_to_std(TS)
+# t = np.logical_not(self._fd.infinite_zone.fracture).astype(np.float64)
+# likelihood = stats.norm.cdf(np.log10(infinite_zone.load/SD), scale=abs(std_log))
+# non_log_likelihood = t+(1.-2.*t)*likelihood
+# if non_log_likelihood.eq(0.0).any():
+#     return -np.inf
+# return np.log(non_log_likelihood).sum()
+# ```
 #
 # When using `full_output=True`, fmin returns a tuple where:
 # - `var_opt[0]` = optimized parameters (SD and TS)
@@ -91,169 +173,3 @@ def analyze_fatigue_file(file_path):
 # - warnflag = 0: Optimization succeeded (converged properly)
 # - warnflag = 1: Maximum number of iterations reached without convergence
 # - warnflag = 2: Function evaluations not changing (possible precision loss)
-
-    
-    
-# %% Load a test file
-# Sheet containing data must be named 'Data'
-
-file_path = "All Data/250514_Evaluation.xlsx"
-df_test, ref_values = analyze_fatigue_file(file_path)
-
-
-# %% Prepare data for analysis
-df_prepared = df_test[['load', 'cycles', 'censor']]
-df_prepared = woehler.determine_fractures(df_prepared, NG)
-fatigue_data = df_prepared.fatigue_data
-
-
-# %% CONTROL: Run normal MaxLikeInf analysis BEFORE running further blocks
-analyzer = woehler.MaxLikeInf(fatigue_data)
-result = analyzer.analyze()
-print(f"Standard analysis results:")
-print(f"SD: {result.SD}")
-print(f"TS: {result.TS}")
-print(f"ND: {result.ND}")
-print(f"k_1: {result.k_1}")
-
-
-# %% Track optimization progress with MaxLikeInf
-
-# Create list to store optimization steps
-optimization_steps = []
-
-# Create likelihood object for the fatigue data
-lh = Likelihood(fatigue_data)
-
-# Define objective function that records steps
-def objective_function(p):
-    # Calculate likelihood
-    likelihood = lh.likelihood_infinite(p[0], p[1])
-    
-    # Store current step
-    optimization_steps.append({
-        'Step': len(optimization_steps) + 1,
-        'SD': p[0],
-        'TS': p[1],
-        'Likelihood': likelihood
-    })
-    
-    # For minimization, return negative likelihood
-    return -likelihood
-
-
-# %% Run optimization with tracking
-
-# Get initial values from fatigue_data
-SD_start = fatigue_data.fatigue_limit
-TS_start = 1.2
-
-print(f"Initial values - SD: {SD_start:.2f}, TS: {TS_start:.2f}")
-
-# Run optimization with our tracking function
-var_opt = optimize.fmin(
-    objective_function,
-    [SD_start, TS_start],
-    disp=True,
-    full_output=True
-)
-
-# Extract results
-SD = var_opt[0][0]
-TS = var_opt[0][1]
-warnflag = var_opt[4]  # Get the warnflag directly 
-message = var_opt[5] if len(var_opt) > 5 else "No message"
-
-# Print the optimizer status with more detail
-warnflag_meanings = {
-    0: "Success - optimization converged",
-    1: "Maximum number of iterations/evaluations reached",
-    2: "Function values not changing (precision loss)",
-    3: "NaN result encountered"
-}
-
-print(f"\nOptimization status: {warnflag_meanings.get(warnflag, 'Unknown')}")
-print(f"Raw warnflag value: {warnflag}")
-print(f"Message: {message}")
-print(f"Final values - SD: {SD:.2f}, TS: {TS:.2f}")
-
-# Calculate slog from TS
-slog = np.log10(TS)/2.5361
-print(f"Calculated slog: {slog:.4f}")
-
-# Check if values are reasonable
-min_load = fatigue_data.load.min()
-max_load = fatigue_data.load.max()
-
-reasonable_values = True
-if SD < min_load * 0.5 or SD > max_load * 2.0:
-    print(f"WARNING: SD value {SD:.2f} outside reasonable range [{min_load*0.5:.2f}, {max_load*2.0:.2f}]")
-    reasonable_values = False
-
-if TS < 1.0 or TS > 10.0:
-    print(f"WARNING: TS value {TS:.2f} outside typical range [1.0, 10.0]")
-    reasonable_values = False
-
-print(f"Values reasonable: {reasonable_values}")
-
-
-# %% Plot convergence
-
-#!TODO: move this to a different file
-
-# Convert to DataFrame for easier plotting
-df_steps = pd.DataFrame(optimization_steps)
-
-# Create convergence plot
-fig = go.Figure()
-
-# Add likelihood curve
-fig.add_trace(go.Scatter(
-    x=df_steps['Step'], 
-    y=df_steps['Likelihood'],
-    mode='lines+markers', 
-    name='Likelihood'
-))
-
-# Add SD parameter convergence
-fig.add_trace(go.Scatter(
-    x=df_steps['Step'], 
-    y=df_steps['SD'],
-    mode='lines+markers', 
-    name='SD (Endurance Limit)',
-    yaxis='y2'  # Use secondary axis
-))
-
-# Add TS parameter convergence
-fig.add_trace(go.Scatter(
-    x=df_steps['Step'], 
-    y=df_steps['TS'],
-    mode='lines+markers', 
-    name='TS (Scatter)',
-    yaxis='y3'  # Use tertiary axis
-))
-
-# Update layout with multiple y-axes
-fig.update_layout(
-    title='Optimization Convergence',
-    xaxis=dict(title='Iteration'),
-    yaxis=dict(title='Likelihood'),
-    yaxis2=dict(
-        title='SD Value',
-        overlaying='y',
-        side='right'
-    ),
-    yaxis3=dict(
-        title='TS Value',
-        overlaying='y',
-        anchor='free',
-        side='right',
-        position=0.85
-    ),
-    legend=dict(x=0.01, y=0.99),
-    width=900,
-    height=600
-)
-
-fig.show()
-# %%
