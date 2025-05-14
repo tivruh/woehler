@@ -73,6 +73,27 @@ def analyze_fatigue_file(file_path):
         traceback.print_exc()
         return None, None
     
+
+# %% [markdown]
+# ## SciPy fmin optimization output
+# 
+# PyLife's Woehler module uses SciPy's `optimize.fmin()` function (Nelder-Mead algorithm)
+# in MaxLikeInf to determine SD (endurance limit) and TS (scatter).
+# 
+# When using `full_output=True`, fmin returns a tuple where:
+# - `var_opt[0]` = optimized parameters (SD and TS)
+# - `var_opt[1]` = final optimized function value
+# - `var_opt[2]` = number of function evaluations
+# - `var_opt[3]` = number of iterations
+# - `var_opt[4]` = warnflag (0=success, 1=max iterations, 2=function not improving)
+# - `var_opt[5]` = termination message
+# 
+# The warnflag at index 4 is the critical value for determining success:
+# - warnflag = 0: Optimization succeeded (converged properly)
+# - warnflag = 1: Maximum number of iterations reached without convergence
+# - warnflag = 2: Function evaluations not changing (possible precision loss)
+
+    
     
 # %% Load a test file
 
