@@ -107,6 +107,7 @@ lh = Likelihood(fatigue_data)
 nm_results = run_optimization_with_tracking(lh, [fatigue_data.fatigue_limit, 1.2], method='nelder-mead')
 
 # Try L-BFGS-B if needed
+# !TODO check if proper success attribute is printed from optimize
 if not nm_results['success'] or not nm_results['reasonable_values']:
     print("\nNelder-Mead failed or produced unreasonable values. Trying L-BFGS-B...")
     bounds = [(fatigue_data.load.min() * 0.5, fatigue_data.load.max() * 2.0), (1.0, 10.0)]
