@@ -4,6 +4,45 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from scipy import optimize
+import traceback
+
+def analyze_fatigue_file(file_path):
+    """Basic function to load and inspect fatigue test data"""
+    try:
+        print(f"\nLoading file: {file_path}")
+        
+        # Read test data
+        df_test = pd.read_excel(file_path, sheet_name='Data')
+        
+        # Rename to 'load' (if column name is 'loads')
+        if 'loads' in df_test.columns:
+            df_test = df_test.rename(columns={'loads': 'load'})
+            
+        # Read Jurojin reference values if they exist
+        try:
+            df_ref = pd.read_excel(file_path, sheet_name='Jurojin_results', header=None)
+            
+            # Extract reference values
+            ref_values = {}
+            for idx, row in df_ref.iterrows():
+                param_name = row[0]
+                param_value = row[1]
+                if isinstance(param_value, str) and ',' in param_value:
+                    param_value = float(param_value.replace(',', '.'))
+                ref_values[param_name] = param_value
+        except:
+            ref_values = None
+            print("No reference values found")
+        
+        return df_test, ref_values
+        
+    except Exception as e:
+        print(f"Error processing {file_path}:")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        traceback.print_exc()
+        return None, None
+
 
 def run_optimization_with_tracking(likelihood_obj, initial_values, method='nelder-mead', bounds=None):
     """Run optimization with tracking for either method and plot results

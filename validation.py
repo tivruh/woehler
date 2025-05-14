@@ -4,7 +4,7 @@
 # %% imports
 
 import os
-import traceback
+
 import math
 import time
 
@@ -17,67 +17,27 @@ from scipy.stats import norm, linregress
 import pylife.materialdata.woehler as woehler
 from pylife.materiallaws import WoehlerCurve
 from pylife.materialdata.woehler.likelihood import Likelihood
-from woehler_utils import *
 
 from scipy import optimize
 from scipy import stats
 from datetime import datetime
 
 
-# %% Constants, display options
-# Sheet containing data must be named 'Data'
-
-file_path = "All Data/4PB_7.xlsx"
-
-N_LCF = 10000  # Pivot point in LCF
-NG = 5000000   # Maximum number of cycles
-
-
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
 
-# %% function to load and inspect fatigue test data
-
-def analyze_fatigue_file(file_path):
-    """Basic function to load and inspect fatigue test data"""
-    try:
-        print(f"\nLoading file: {file_path}")
-        
-        # Read test data
-        df_test = pd.read_excel(file_path, sheet_name='Data')
-        
-        # Rename to 'load' (if column name is 'loads')
-        if 'loads' in df_test.columns:
-            df_test = df_test.rename(columns={'loads': 'load'})
-            
-        # Read Jurojin reference values if they exist
-        try:
-            df_ref = pd.read_excel(file_path, sheet_name='Jurojin_results', header=None)
-            
-            # Extract reference values
-            ref_values = {}
-            for idx, row in df_ref.iterrows():
-                param_name = row[0]
-                param_value = row[1]
-                if isinstance(param_value, str) and ',' in param_value:
-                    param_value = float(param_value.replace(',', '.'))
-                ref_values[param_name] = param_value
-        except:
-            ref_values = None
-            print("No reference values found")
-        
-        return df_test, ref_values
-        
-    except Exception as e:
-        print(f"Error processing {file_path}:")
-        print(f"Error type: {type(e).__name__}")
-        print(f"Error message: {str(e)}")
-        traceback.print_exc()
-        return None, None
-
-
 # %% Prepare data for analysis
+
+from woehler_utils import *
+
+# Sheet containing data must be named 'Data'
+
+file_path = "All Data/4PB_12.xlsx"
+
+N_LCF = 10000  # Pivot point in LCF
+NG = 5000000   # Maximum number of cycles
+switch = False # Change to True to run L-BFGS-B
 
 df_test, ref_values = analyze_fatigue_file(file_path)
 df_prepared = df_test[['load', 'cycles', 'censor']]
@@ -107,7 +67,7 @@ lh = Likelihood(fatigue_data)
 nm_results = run_optimization_with_tracking(lh, [fatigue_data.fatigue_limit, 1.2], method='nelder-mead')
 
 # Try L-BFGS-B if needed
-if not nm_results['success'] or not nm_results['reasonable_values']:
+if not nm_results['success'] or not nm_results['reasonable_values'] or switch==True:
     print("\nNelder-Mead failed or produced unreasonable values. Trying L-BFGS-B...")
     bounds = [(fatigue_data.load.min() * 0.5, fatigue_data.load.max() * 2.0), (1.0, 10.0)]
     
@@ -122,6 +82,143 @@ if not nm_results['success'] or not nm_results['reasonable_values']:
     print("\nComparison of methods:")
     print(f"Nelder-Mead: SD={nm_results['SD']:.2f}, TS={nm_results['TS']:.2f}, Success={nm_results['success']}")
     print(f"L-BFGS-B: SD={lbfgs_results['SD']:.2f}, TS={lbfgs_results['TS']:.2f}, Success={lbfgs_results['success']}")
+
+
+# %% Run Huck method analysis
+from huck import HuckMethod
+
+def analyze_with_huck(fatigue_data):
+    """Run analysis using Huck's method"""
+    print("\n=== Running Huck's Method Analysis ===")
+    
+    # Create analyzer and run analysis
+    analyzer = HuckMethod(fatigue_data)
+    result = analyzer.analyze()
+    
+    # Calculate slog from TS
+    slog = np.log10(result.TS)/2.5361
+    
+    # Print summary
+    print("\nHuck's Method Results:")
+    print(f"SD (Pü50): {result.SD:.2f}")
+    print(f"TS: {result.TS:.4f}")
+    print(f"slog: {slog:.4f}")
+    print(f"ND: {result.ND:.2f}")
+    print(f"k_1: {result.k_1:.2f}")
+    
+    # Visualize staircase
+    analyzer.plot_staircase()
+    
+    return result
+
+# %% Compare MaxLikeInf to Huck method 
+
+def compare_methods(fatigue_data, ref_values=None):
+    """Compare MaxLikeInf (Nelder-Mead), L-BFGS-B and Huck method results"""
+    # Run Nelder-Mead
+    ml_analyzer = woehler.MaxLikeInf(fatigue_data)
+    ml_result = ml_analyzer.analyze()
+    ml_slog = np.log10(ml_result.TS)/2.5361
+    
+    # Check if Nelder-Mead results are reasonable
+    min_load = fatigue_data.load.min()
+    max_load = fatigue_data.load.max()
+    nm_reasonable = True
+    
+    if ml_result.SD < min_load * 0.5 or ml_result.SD > max_load * 2.0 or ml_result.TS < 1.0 or ml_result.TS > 50.0:
+        nm_reasonable = False
+        print("Nelder-Mead results appear unreasonable. Running L-BFGS-B...")
+        
+        # Run L-BFGS-B
+        lh = Likelihood(fatigue_data)
+        bounds = [(min_load * 0.5, max_load * 2.0), (1.0, 50.0)]
+        lbfgs_results = run_optimization_with_tracking(
+            lh, 
+            [fatigue_data.fatigue_limit, 1.2], 
+            method='l-bfgs-b',
+            bounds=bounds
+        )
+        
+        # Create a Series with L-BFGS-B results in PyLife format
+        lbfgs_sd, lbfgs_ts = lbfgs_results['SD'], lbfgs_results['TS']
+        lbfgs_series = pd.Series({
+            'SD': lbfgs_sd,
+            'TS': lbfgs_ts,
+            'ND': ml_result.ND,  # Use same ND and k_1 as these aren't affected
+            'k_1': ml_result.k_1
+        })
+        lbfgs_slog = np.log10(lbfgs_ts)/2.5361
+    else:
+        lbfgs_series = None
+        lbfgs_slog = None
+    
+    # Run Huck method
+    huck_analyzer = HuckMethod(fatigue_data)
+    huck_result = huck_analyzer.analyze()
+    huck_slog = np.log10(huck_result.TS)/2.5361
+    
+    # Create comparison table
+    comparison = {
+        'Parameter': ['SD (Pü50)', 'TS', 'slog', 'ND', 'k_1']
+    }
+    
+    # Collect method names first - important to avoid dictionary modification during iteration
+    method_names = ['Nelder-Mead']
+    if not nm_reasonable and lbfgs_series is not None:
+        method_names.append('L-BFGS-B')
+    method_names.append('Huck')
+    
+    # Always add Nelder-Mead results
+    comparison['Nelder-Mead'] = [
+        f"{ml_result.SD:.2f}", 
+        f"{ml_result.TS:.4f}",
+        f"{ml_slog:.4f}",
+        f"{ml_result.ND:.0f}",
+        f"{ml_result.k_1:.2f}"
+    ]
+    
+    # Add L-BFGS-B results if available
+    if not nm_reasonable and lbfgs_series is not None:
+        comparison['L-BFGS-B'] = [
+            f"{lbfgs_series.SD:.2f}", 
+            f"{lbfgs_series.TS:.4f}",
+            f"{lbfgs_slog:.4f}",
+            f"{lbfgs_series.ND:.0f}",
+            f"{lbfgs_series.k_1:.2f}"
+        ]
+    
+    # Add Huck results
+    comparison['Huck'] = [
+        f"{huck_result.SD:.2f}", 
+        f"{huck_result.TS:.4f}",
+        f"{huck_slog:.4f}",
+        f"{huck_result.ND:.0f}",
+        f"{huck_result.k_1:.2f}"
+    ]
+    
+    # Add reference values if available
+    if ref_values is not None:
+        comparison['Reference'] = [
+            f"{ref_values.get('Pü50', 'N/A')}", 
+            f"{ref_values.get('TS', 'N/A')}",
+            f"{ref_values.get('slog', 'N/A')}",
+            f"{ref_values.get('ND', 'N/A')}",
+            f"{ref_values.get('k', 'N/A')}"
+        ]
+    
+    comparison_df = pd.DataFrame(comparison)
+    print("\nComparison of Methods:")
+    print(comparison_df)
+    
+    return comparison_df, ml_result, lbfgs_series if not nm_reasonable else None, huck_result
+
+# %% Run comparison
+
+comparison_df, ml_result, lbfgs_result, huck_result = compare_methods(fatigue_data, ref_values)
+
+# Display formatted DataFrame
+from IPython.display import display
+display(comparison_df)
 
 
 # %% [markdown] about fmin() output 
