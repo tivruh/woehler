@@ -123,7 +123,7 @@ def run_optimization_with_tracking(likelihood_obj, initial_values, method='nelde
     
 
 def plot_optimization_convergence(steps, method="optimization"):
-    """Plot optimization convergence"""
+    """Plot optimization convergence using original validation style"""
     # Convert to DataFrame
     df_steps = pd.DataFrame(steps)
     
@@ -138,7 +138,7 @@ def plot_optimization_convergence(steps, method="optimization"):
     # Create figure
     fig = go.Figure()
     
-    # Add traces
+    # Add likelihood curve
     fig.add_trace(go.Scatter(
         x=df_steps['Step'], 
         y=df_steps['Likelihood'],
@@ -146,43 +146,54 @@ def plot_optimization_convergence(steps, method="optimization"):
         name='Likelihood'
     ))
     
+    # Add SD parameter convergence
     fig.add_trace(go.Scatter(
         x=df_steps['Step'], 
         y=df_steps['SD'],
         mode='lines+markers', 
         name='SD (Endurance Limit)',
-        yaxis='y2'
+        yaxis='y2'  # Use secondary axis
     ))
     
+    # Add TS parameter convergence
     fig.add_trace(go.Scatter(
         x=df_steps['Step'], 
         y=df_steps['TS'],
         mode='lines+markers', 
         name='TS (Scatter)',
-        yaxis='y3'
+        yaxis='y3'  # Use tertiary axis
     ))
     
     # Update layout with multiple y-axes
     fig.update_layout(
         title=f'{display_method} Convergence',
         xaxis=dict(title='Iteration'),
-        yaxis=dict(title='Likelihood'),
+        yaxis=dict(
+            title='Likelihood',
+            domain=[0, 0.9],
+            gridcolor='lightgray'
+        ),
         yaxis2=dict(
             title='SD Value',
+            side='right',
             overlaying='y',
-            side='right'
+            anchor='x',
+            autorange=True,
+            gridcolor='lightgray'
         ),
         yaxis3=dict(
             title='TS Value',
-            overlaying='y',
-            anchor='free',
             side='right',
-            position=0.85
+            overlaying='y',
+            position=0.9,
+            anchor='free',
+            autorange=True,
+            gridcolor='lightgray'
         ),
         legend=dict(x=0.01, y=0.99),
         width=900,
-        height=600
+        height=600,
+        plot_bgcolor='rgba(240, 240, 250, 0.8)'
     )
     
-    fig.show()
     return fig
