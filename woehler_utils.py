@@ -164,7 +164,7 @@ def plot_optimization_convergence(steps, method="optimization"):
     
     # Update layout with multiple y-axes
     fig.update_layout(
-        title=f'{display_method.capitalize()} Convergence',
+        title=f'{display_method} Convergence',
         xaxis=dict(title='Iteration'),
         yaxis=dict(title='Likelihood'),
         yaxis2=dict(
